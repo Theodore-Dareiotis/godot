@@ -2826,7 +2826,51 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 	float z_near = cull_data.camera_matrix->get_z_near();
 	bool is_orthogonal = cull_data.camera_matrix->is_orthogonal();
 
-	for (uint64_t i = p_from; i < p_to; i++) {
+    // ---- EXPERIMENTAL: Hierarchical Culling ----
+	bool use_bvh_cull = GLOBAL_GET("rendering/experimental/use_bvh_culling");
+	LocalVector<uint64_t> instances_to_process;
+	
+	if (use_bvh_cull) {		
+        Vector<Vector3> points = Geometry3D::compute_convex_mesh_points(cull_data.cull->frustum.planes_ptr, cull_data.cull->frustum.plane_count);
+		
+		struct FrustumCullFunctor {
+			LocalVector<uint64_t> *results;
+			_FORCE_INLINE_ bool operator()(void *p_data) {
+				Instance *p_instance = (Instance *)p_data;
+				if (p_instance->array_index >= 0){
+					results->push_back((uint64_t)p_instance->array_index);
+				}
+				return false;
+			}
+		};
+
+		FrustumCullFunctor cull_functor;
+		cull_functor.results = &instances_to_process;
+
+		
+        cull_data.scenario->indexers[Scenario::INDEXER_GEOMETRY].convex_query(
+            cull_data.cull->frustum.planes_ptr, cull_data.cull->frustum.plane_count,
+            points.ptr(), points.size(),
+            cull_functor
+        );
+        
+        cull_data.scenario->indexers[Scenario::INDEXER_VOLUMES].convex_query(
+            cull_data.cull->frustum.planes_ptr, cull_data.cull->frustum.plane_count,
+            points.ptr(), points.size(),
+            cull_functor
+        );
+
+	}
+	else {
+		instances_to_process.reserve(p_to - p_from);
+		for (uint64_t i = p_from; i < p_to; i++) {
+			instances_to_process.push_back(i);
+		}
+	}
+	// ---- End Experimental ----
+	for (uint64_t k = 0; k < instances_to_process.size(); k++) {
+		uint64_t i = instances_to_process[k];
+		
 		bool mesh_visible = false;
 
 		InstanceData &idata = cull_data.scenario->instance_data[i];
@@ -2835,7 +2879,7 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 
 #define HIDDEN_BY_VISIBILITY_CHECKS (visibility_flags == InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN_CLOSE_RANGE || visibility_flags == InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN)
 #define LAYER_CHECK (cull_data.visible_layers & idata.layer_mask)
-#define IN_FRUSTUM(f) (cull_data.scenario->instance_aabbs[i].in_frustum(f))
+#define IN_FRUSTUM(f) (use_bvh_cull ? true : cull_data.scenario->instance_aabbs[i].in_frustum(f))
 #define VIS_RANGE_CHECK ((idata.visibility_index == -1) || _visibility_range_check<false>(cull_data.scenario->instance_visibility[idata.visibility_index], cull_data.cam_transform.origin, cull_data.visibility_viewport_mask) == 0)
 #define VIS_PARENT_CHECK (_visibility_parent_check(cull_data, idata))
 #define VIS_CHECK (visibility_check < 0 ? (visibility_check = (visibility_flags != InstanceData::FLAG_VISIBILITY_DEPENDENCY_NEEDS_CHECK || (VIS_RANGE_CHECK && VIS_PARENT_CHECK))) : visibility_check)
@@ -3092,6 +3136,7 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 			cull_result.mesh_instances.push_back(cull_data.scenario->instance_data[i].instance->mesh_instance);
 		}
 	}
+    
 }
 
 void RendererSceneCull::_scene_particles_set_view_axis(RID p_particles, const Vector3 &p_axis, const Vector3 &p_up_axis) {
@@ -3240,7 +3285,9 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 		uint64_t time_from = OS::get_singleton()->get_ticks_usec();
 #endif
 
-		if (cull_to > thread_cull_threshold) {
+		bool use_bvh_cull = GLOBAL_GET("rendering/experimental/use_bvh_culling");
+
+		if (!use_bvh_cull &&cull_to > thread_cull_threshold) {
 			//multiple threads
 			for (InstanceCullResult &thread : scene_cull_result_threads) {
 				thread.clear();
@@ -4267,6 +4314,9 @@ void RendererSceneCull::set_physics_interpolation_enabled(bool p_enabled) {
 RendererSceneCull::RendererSceneCull() {
 	render_pass = 1;
 	singleton = this;
+
+	// Setting to enable BVH frustumculling
+	GLOBAL_DEF("rendering/experimental/use_bvh_culling", false);
 
 	instance_cull_result.set_page_pool(&instance_cull_page_pool);
 	instance_shadow_cull_result.set_page_pool(&instance_cull_page_pool);
