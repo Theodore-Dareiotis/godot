@@ -2879,7 +2879,7 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 
 #define HIDDEN_BY_VISIBILITY_CHECKS (visibility_flags == InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN_CLOSE_RANGE || visibility_flags == InstanceData::FLAG_VISIBILITY_DEPENDENCY_HIDDEN)
 #define LAYER_CHECK (cull_data.visible_layers & idata.layer_mask)
-#define IN_FRUSTUM(f) (use_bvh_cull ? true : cull_data.scenario->instance_aabbs[i].in_frustum(f))
+#define IN_FRUSTUM(f) (cull_data.scenario->instance_aabbs[i].in_frustum(f))
 #define VIS_RANGE_CHECK ((idata.visibility_index == -1) || _visibility_range_check<false>(cull_data.scenario->instance_visibility[idata.visibility_index], cull_data.cam_transform.origin, cull_data.visibility_viewport_mask) == 0)
 #define VIS_PARENT_CHECK (_visibility_parent_check(cull_data, idata))
 #define VIS_CHECK (visibility_check < 0 ? (visibility_check = (visibility_flags != InstanceData::FLAG_VISIBILITY_DEPENDENCY_NEEDS_CHECK || (VIS_RANGE_CHECK && VIS_PARENT_CHECK))) : visibility_check)
@@ -3304,13 +3304,14 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 			//single threaded
 			_scene_cull(cull_data, scene_cull_result, cull_from, cull_to);
 		}
-
+// #define DEBUG_CULL_TIME
 #ifdef DEBUG_CULL_TIME
 		static float time_avg = 0;
 		static uint32_t time_count = 0;
 		time_avg += double(OS::get_singleton()->get_ticks_usec() - time_from) / 1000.0;
 		time_count++;
-		print_line("time taken: " + rtos(time_avg / time_count));
+		String mode = use_bvh_cull ? "BVH" : "LINEAR";
+    	print_line(vformat("CULL_DATA,%s,%f", mode, time_avg / time_count));
 #endif
 
 		if (scene_cull_result.mesh_instances.size()) {
