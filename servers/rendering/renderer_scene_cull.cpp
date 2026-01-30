@@ -2847,7 +2847,7 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 		FrustumCullFunctor cull_functor;
 		cull_functor.results = &instances_to_process;
 
-		
+		// 1. Camera Frustum Culling
         cull_data.scenario->indexers[Scenario::INDEXER_GEOMETRY].convex_query(
             cull_data.cull->frustum.planes_ptr, cull_data.cull->frustum.plane_count,
             points.ptr(), points.size(),
@@ -2859,6 +2859,42 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
             points.ptr(), points.size(),
             cull_functor
         );
+
+		// 2. Shadow Cascades Culling
+        // Ελέγχουμε όλα τα ενεργά Cascades του Directional Light
+        for (uint32_t i = 0; i < cull_data.cull->shadow_count; i++) {
+            for (uint32_t j = 0; j < cull_data.cull->shadows[i].cascade_count; j++) {
+                const Frustum &shadow_frustum = cull_data.cull->shadows[i].cascades[j].frustum;
+                
+                
+                Vector<Vector3> shadow_points = Geometry3D::compute_convex_mesh_points(shadow_frustum.planes_ptr, shadow_frustum.plane_count);
+
+                
+                cull_data.scenario->indexers[Scenario::INDEXER_GEOMETRY].convex_query(
+                    shadow_frustum.planes_ptr, shadow_frustum.plane_count,
+                    shadow_points.ptr(), shadow_points.size(),
+                    cull_functor
+                );
+            }
+        }
+
+        // 3. deduplicate instances
+        // Επειδή ένα αντικείμενο μπορεί να βρεθεί και από την κάμερα και από τις σκιές,
+        // πρέπει να το αφαιρέσουμε για να μην το επεξεργαστούμε δύο φορές.
+        if (instances_to_process.size() > 1) {
+            instances_to_process.sort();
+            
+            
+            uint64_t *ptr = instances_to_process.ptr();
+            uint32_t unique_count = 1;
+            for (uint32_t i = 1; i < instances_to_process.size(); i++) {
+                if (ptr[i] != ptr[unique_count - 1]) {
+                    ptr[unique_count] = ptr[i];
+                    unique_count++;
+                }
+            }
+            instances_to_process.resize(unique_count);
+        }
 
 	}
 	else {
@@ -3280,7 +3316,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 		cull_data.occlusion_buffer = RendererSceneOcclusionCull::get_singleton()->buffer_get_ptr(p_viewport);
 		cull_data.camera_matrix = &p_camera_data->main_projection;
 		cull_data.visibility_viewport_mask = scenario->viewport_visibility_masks.has(p_viewport) ? scenario->viewport_visibility_masks[p_viewport] : 0;
-//#define DEBUG_CULL_TIME
+#define DEBUG_CULL_TIME
 #ifdef DEBUG_CULL_TIME
 		uint64_t time_from = OS::get_singleton()->get_ticks_usec();
 #endif
@@ -3304,14 +3340,12 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 			//single threaded
 			_scene_cull(cull_data, scene_cull_result, cull_from, cull_to);
 		}
-// #define DEBUG_CULL_TIME
 #ifdef DEBUG_CULL_TIME
-		static float time_avg = 0;
-		static uint32_t time_count = 0;
-		time_avg += double(OS::get_singleton()->get_ticks_usec() - time_from) / 1000.0;
-		time_count++;
-		String mode = use_bvh_cull ? "BVH" : "LINEAR";
-    	print_line(vformat("CULL_DATA,%s,%f", mode, time_avg / time_count));
+
+		double current_frame_time = double(OS::get_singleton()->get_ticks_usec() - time_from) / 1000.0;
+		ProjectSettings::get_singleton()->set_setting("rendering/experimental/last_cull_time_ms", current_frame_time);
+		// String mode = use_bvh_cull ? "BVH" : "LINEAR";
+        // print_line(vformat("CULL_DATA,%s,%f", mode, current_frame_time));
 #endif
 
 		if (scene_cull_result.mesh_instances.size()) {
